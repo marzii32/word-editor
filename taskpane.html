@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>บรรณาธิการ AI</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root{
+    --bg:#fbfaf7; --ink:#2a2723; --muted:#7a746b; --line:#e4dfd6;
+    --old:#a4332b; --new:#1f6b3a; --accent:#2f4a66; --card:#ffffff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:12px;background:var(--bg);color:var(--ink);
+    font:14px/1.6 "Sarabun","Leelawadee UI","Tahoma",sans-serif}
+  h1{font-size:16px;margin:0 0 10px}
+  button{font:inherit;cursor:pointer;border-radius:4px;border:1px solid var(--line);
+    background:#fff;color:var(--ink);padding:5px 10px}
+  button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;width:100%;padding:9px;font-weight:600}
+  button:disabled{opacity:.5;cursor:default}
+  details{margin:0 0 10px;color:var(--muted)}
+  summary{cursor:pointer}
+  input[type=password],input[type=text]{width:100%;padding:6px;border:1px solid var(--line);border-radius:4px;margin-top:6px;font:inherit}
+  label.chk{display:flex;gap:6px;align-items:center;margin:8px 0;color:var(--ink)}
+  #status{margin:10px 0;color:var(--muted);min-height:1.6em}
+  #status.err{color:var(--old)}
+  .tools{display:flex;gap:6px;margin:0 0 10px}
+  .item{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:10px}
+  .head{font-weight:600;border-left:3px solid var(--accent);padding-left:8px;margin-bottom:8px}
+  .row{margin:3px 0}
+  .row b{font-weight:600}
+  .row.none{color:var(--muted)}
+  .row.revised{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);color:var(--new)}
+  .acts{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+  .done{color:var(--new)}
+</style>
+</head>
+<body>
+<h1>บรรณาธิการ AI</h1>
+
+<details id="settings">
+  <summary>ตั้งค่า API key</summary>
+  <input type="password" id="key" placeholder="sk-ant-..." autocomplete="off">
+  <button id="saveKey" style="margin-top:6px">บันทึก</button>
+</details>
+
+<label class="chk"><input type="checkbox" id="track" checked> แก้แบบ Track Changes (ย้อนกลับได้)</label>
+<button class="primary" id="run">ตรวจทาน</button>
+<div id="status">เลือกข้อความในเอกสารเพื่อตรวจเฉพาะส่วนนั้น ถ้าไม่เลือกจะตรวจทั้งเอกสาร</div>
+
+<div class="tools" id="tools" hidden>
+  <button id="copy">คัดลอกรายงาน</button>
+</div>
+<div id="report"></div>
+
+<script>
+// ===== ตั้งค่า =====
+const MODEL = 'claude-sonnet-5-5';
+const MAX_CHARS = 5000; // ความยาวต่อรอบ (ตัวอักษร)
+
+const SYSTEM_PROMPT = `คุณคือบรรณาธิการมืออาชีพ ทำหน้าที่ตรวจทานต้นฉบับนิยายภาษาไทย โดยให้ตรวจสอบเฉพาะจุดเหล่านี้:
+
+1. คำผิด/คำตก: คำสะกดผิด คำพยางค์เกิน คำตกหล่น แก้ให้ถูกต้องตามหลักภาษา
+2. คำซ้ำ: คำที่ใช้ซ้ำติดกันถี่เกินไปในประโยคหรือย่อหน้าเดียวกัน เสนอคำพ้องความหมายที่เหมาะสมกว่า
+3. การบรรยายเยิ่นเย้อ: ประโยคที่ยืดยาว วกวน หรือขยายความมากเกินไป เสนอวิธีเขียนให้กระชับและเห็นภาพชัดขึ้น
+
+กฎสำคัญ:
+- ห้ามแต่งเนื้อเรื่องเพิ่มเอง คงเส้นเรื่องและสำนวนเดิมของผู้เขียนไว้ให้มากที่สุด
+- บทสนทนาของตัวละครอาจใช้ภาษาพูดหรือสะกดพิเศษโดยตั้งใจ อย่าแก้ถ้าไม่ใช่ความผิดพลาดจริง
+- อย่ารายงานสิ่งที่ไม่ใช่ปัญหา ถ้าไม่พบปัญหาเลย ให้ส่ง items เป็นอาร์เรย์ว่าง
+- รวมปัญหาที่อยู่ในประโยคหรือข้อความเดียวกันไว้ในรายการเดียว
+
+ข้อกำหนดของช่อง original:
+- ต้องคัดลอกจากต้นฉบับให้ตรงทุกตัวอักษร ห้ามแก้หรือสรุป
+- เลือกเป็นประโยคหรือวลีที่อยู่ในย่อหน้าเดียว ความยาวไม่เกินประมาณ 200 ตัวอักษร เพื่อให้ค้นหาในเอกสารเจอ
+
+ตอบกลับเป็น JSON เท่านั้น ห้ามมีข้อความอื่นหรือ markdown:
+{"items":[{
+  "original":"ข้อความเดิม",
+  "typo":"คำผิด/คำตก และวิธีแก้ (เว้นว่างถ้าไม่มี)",
+  "wordy":"สิ่งที่เยิ่นเย้อและเหตุผลสั้นๆ (เว้นว่างถ้าไม่มี)",
+  "repeat":"คำที่ซ้ำ และคำที่เสนอแทน (เว้นว่างถ้าไม่มี)",
+  "revised":"ประโยคที่ปรับปรุงแล้วครบทุกข้อ"
+}]}`;
+
+// ===== ตัวช่วย =====
+const $ = id => document.getElementById(id);
+let results = [];
+
+function setStatus(msg, isErr){ const s=$('status'); s.textContent=msg; s.className=isErr?'err':''; }
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function getKey(){ try{ return localStorage.getItem('anthropic_key')||''; }catch(e){ return ''; } }
+
+function splitText(text, max){
+  const paras = text.split(/\r|\n/);
+  const chunks = []; let cur = '';
+  for (const p of paras){
+    if (cur && (cur.length + p.length + 1) > max){ chunks.push(cur); cur = p; }
+    else cur = cur ? cur + '\n' + p : p;
+  }
+  if (cur.trim()) chunks.push(cur);
+  return chunks;
+}
+
+async function callClaude(chunk){
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{
+      'content-type':'application/json',
+      'x-api-key': getKey(),
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-direct-browser-access':'true'
+    },
+    body: JSON.stringify({
+      model: MODEL, max_tokens: 6000, system: SYSTEM_PROMPT,
+      messages:[{role:'user', content:'ตรวจทานต้นฉบับต่อไปนี้:\n\n'+chunk}]
+    })
+  });
+  if (!res.ok) throw new Error('API ผิดพลาด ('+res.status+'): '+(await res.text()).slice(0,200));
+  const data = await res.json();
+  const raw = data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
+  const a = raw.indexOf('{'), b = raw.lastIndexOf('}');
+  try { return JSON.parse(raw.slice(a,b+1)).items || []; }
+  catch(e){ return []; }
+}
+
+// ===== Word =====
+async function getTargetText(){
+  return Word.run(async ctx=>{
+    const sel = ctx.document.getSelection(); sel.load('text');
+    await ctx.sync();
+    if (sel.text && sel.text.trim()) return {text: sel.text, scope:'ส่วนที่เลือก'};
+    const body = ctx.document.body; body.load('text');
+    await ctx.sync();
+    return {text: body.text, scope:'ทั้งเอกสาร'};
+  });
+}
+
+// Word search จำกัด 255 ตัวอักษร: ถ้ายาวกว่านั้นใช้หัว+ท้ายแล้วต่อกัน
+async function findRange(ctx, text){
+  const body = ctx.document.body, t = text.trim();
+  if (!t) return null;
+  if (t.length <= 250){
+    const r = body.search(t,{matchCase:true}); r.load('items'); await ctx.sync();
+    return r.items[0] || null;
+  }
+  const h = body.search(t.slice(0,100),{matchCase:true});
+  const e = body.search(t.slice(-100),{matchCase:true});
+  h.load('items'); e.load('items'); await ctx.sync();
+  if (!h.items.length || !e.items.length) return null;
+  return h.items[0].expandTo(e.items[0]);
+}
+
+async function goTo(i){
+  try{
+    await Word.run(async ctx=>{
+      const r = await findRange(ctx, results[i].original);
+      if (!r){ setStatus('หาข้อความนี้ในเอกสารไม่เจอ (อาจถูกแก้ไปแล้ว)', true); return; }
+      r.select(); await ctx.sync();
+    });
+  }catch(e){ setStatus(e.message, true); }
+}
+
+async function applyFix(i, btn){
+  try{
+    await Word.run(async ctx=>{
+      if ($('track').checked){
+        try{ ctx.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll; await ctx.sync(); }catch(e){}
+      }
+      const r = await findRange(ctx, results[i].original);
+      if (!r){ setStatus('หาข้อความนี้ในเอกสารไม่เจอ (อาจถูกแก้ไปแล้ว)', true); return; }
+      r.insertText(results[i].revised, 'Replace');
+      await ctx.sync();
+      btn.textContent = 'แก้แล้ว ✓'; btn.className = 'done'; btn.disabled = true;
+    });
+  }catch(e){ setStatus(e.message, true); }
+}
+
+// ===== แสดงผลตามฟอร์ม =====
+function row(label, val){
+  return val && val.trim()
+    ? `<div class="row"><b>${label}:</b> ${esc(val)}</div>`
+    : `<div class="row none"><b>${label}:</b> –</div>`;
+}
+
+function render(){
+  const box = $('report');
+  if (!results.length){ box.innerHTML = '<p class="done">ไม่พบจุดที่ต้องแก้ ✓</p>'; $('tools').hidden = true; return; }
+  box.innerHTML = results.map((it,i)=>`
+    <div class="item">
+      <div class="head">${esc(it.original)}</div>
+      ${row('คำผิด/คำตก', it.typo)}
+      ${row('การบรรยายเยิ่นเย้อ', it.wordy)}
+      ${row('คำซ้ำ', it.repeat)}
+      <div class="row revised"><b>ประโยคที่ปรับแล้ว:</b> ${esc(it.revised)}</div>
+      <div class="acts">
+        <button data-go="${i}">ไปที่ข้อความ</button>
+        <button data-fix="${i}">แทนที่ด้วยประโยคนี้</button>
+      </div>
+    </div>`).join('');
+  $('tools').hidden = false;
+}
+
+function reportText(){
+  return results.map(it =>
+    `${it.original}\n` +
+    `คำผิด/คำตก: ${it.typo||'-'}\n` +
+    `การบรรยายเยิ่นเย้อ: ${it.wordy||'-'}\n` +
+    `คำซ้ำ: ${it.repeat||'-'}\n` +
+    `ประโยคที่ปรับแล้ว: ${it.revised}`
+  ).join('\n\n----------\n\n');
+}
+
+// ===== เหตุการณ์ =====
+$('saveKey').onclick = ()=>{
+  try{ localStorage.setItem('anthropic_key', $('key').value.trim()); setStatus('บันทึก key แล้ว'); $('settings').open=false; }
+  catch(e){ setStatus('บันทึกไม่ได้: '+e.message, true); }
+};
+
+$('run').onclick = async ()=>{
+  if (!getKey()){ $('settings').open = true; setStatus('กรุณาใส่ API key ก่อน', true); return; }
+  $('run').disabled = true; results = []; $('report').innerHTML=''; $('tools').hidden = true;
+  try{
+    const {text, scope} = await getTargetText();
+    if (!text.trim()){ setStatus('ไม่พบข้อความให้ตรวจ', true); return; }
+    const chunks = splitText(text, MAX_CHARS);
+    for (let i=0;i<chunks.length;i++){
+      setStatus(`กำลังตรวจ${scope} ส่วนที่ ${i+1}/${chunks.length}...`);
+      results.push(...await callClaude(chunks[i]));
+    }
+    setStatus(`ตรวจ${scope}เสร็จแล้ว พบ ${results.length} จุด`);
+    render();
+  }catch(e){ setStatus(e.message, true); }
+  finally{ $('run').disabled = false; }
+};
+
+$('report').addEventListener('click', e=>{
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.go !== undefined) goTo(+b.dataset.go);
+  if (b.dataset.fix !== undefined) applyFix(+b.dataset.fix, b);
+});
+
+$('copy').onclick = async ()=>{
+  try{ await navigator.clipboard.writeText(reportText()); setStatus('คัดลอกรายงานแล้ว'); }
+  catch(e){ setStatus('คัดลอกไม่ได้ ลองเลือกข้อความแล้วคัดลอกเอง', true); }
+};
+
+Office.onReady(()=>{ if (!getKey()) $('settings').open = true; });
+</script>
+</body>
+</html>
